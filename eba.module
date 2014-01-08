@@ -1,0 +1,6 @@
+<?php
+
+/**
+ * @file
+ * Provides a way to display blocks amongst the fields of entities.
+ */
