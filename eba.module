@@ -5,7 +5,7 @@
  * Provides a way to display blocks amongst the fields of entities.
  */
 
-define('EBA_ALL_BUNDLES', '_eba_all_bundles_');
+define('EBA_ALL_BUNDLES', '_eba_all_');
 
 /**
  * Load all EBA configuration items.
@@ -31,19 +31,23 @@ function eba_config_load($module, $delta) {
     ->condition('delta', $delta)
     ->execute()
     ->fetch();
-  $result->bundles = unserialize($result->bundles);
+  if ($result) {
+    $result->bundles = unserialize($result->bundles);
+  }
 
   return $result;
 }
 
 /**
  * Save a single EBA configuration item.
- *
- * @param $config
  */
-function eba_config_save($config) {
+function eba_config_save($config, $refresh = TRUE) {
   if (is_object($config)) {
     $config = (array) $config;
+  }
+
+  if (is_array($config['bundles'])) {
+    $config['bundles'] = serialize($config['bundles']);
   }
 
   db_merge('eba_config')
@@ -56,16 +60,24 @@ function eba_config_save($config) {
       'bundles',
     ), TRUE)))
     ->execute();
+
+  if ($refresh) {
+    field_cache_clear();
+  }
 }
 
 /**
  * Delete an EBA configuration item.
  */
-function eba_config_delete($module, $delta) {
+function eba_config_delete($module, $delta, $refresh = TRUE) {
   db_delete('eba_config')
     ->condition('module', $module)
     ->condition('delta', $delta)
     ->execute();
+
+  if ($refresh) {
+    field_cache_clear();
+  }
 }
 
 /**
@@ -77,7 +89,9 @@ function eba_field_extra_fields() {
   $blocks = eba_config_load_all();
   $bundles_info = field_info_bundles();
   foreach ($blocks as $block) {
+    // @TODO Cache each module's block_info result?
     $block_info = module_invoke($block->module, 'block_info');
+    $block_info = $block_info[$block->delta];
 
     foreach ($block->bundles as $entity_type => $block_bundles) {
       if (isset($bundles_info[$entity_type])) {
@@ -88,7 +102,7 @@ function eba_field_extra_fields() {
           if (isset($bundles_info[$entity_type][$bundle])) {
             $return[$entity_type][$bundle]['display']['eba_' . $block->module . '-' . $block->delta] = array(
               'label' => $block_info['info'],
-              'description' => t(''),
+              'description' => $block_info['info'],
               'weight' => isset($block_info['weight']) ? $block_info['weight'] : 30,
             );
           }
@@ -208,62 +222,111 @@ function eba_form_block_admin_configure_alter(&$form, &$form_state, $form_id) {
   list($module, $delta) = $form_state['build_info']['args'];
   $config = eba_config_load($module, $delta);
 
+  // @TODO Organise this form in a friendlier way. Tabs within tabs? Fieldsets?
+  $parent_element = array(
+    '#tree' => TRUE,
+    '#type' => 'fieldset',
+    '#title' => t('Entity bundles to display this block on'),
+    '#description' => t('Make this block display on every entity of the selected types. Note that once a block is set to display, it will instantly appear on all view modes of any entity of that type/bundle unless hidden through the \'Manage display\' fields interface for that entity type/bundle. Use that same interface to re-order this block amongst the entity\'s fields.'),
+  );
+
+  // Manually set #options so that they can appear grouped by entity type.
+  // Groupings are implemented as a label in the #prefix of the first checkbox
+  // option for each entity type.
   $entity_info = entity_get_info();
-  $options = array();
   foreach ($entity_info as $entity_type => $entity_type_info) {
-    $entity_type_label = empty($entity_type_info['label']) ? $entity_type : $entity_type_info['label'];
-    $bundle_label = empty($entity_type_info['bundle label']) ? t('@entity_type bundle', array('@entity_type' => $entity_type_label)) : $entity_type_info['bundle label'];
-    $options[$entity_type_label][EBA_ALL_BUNDLES] = t('Any @bundle_label', array('@bundle_label' => $bundle_label));
-    foreach ($entity_type_info['bundles'] as $bundle => $bundle_info) {
-      $options[$entity_type_label][$bundle] = $bundle_info['label'];
+    if ($entity_type_info['fieldable'] && !empty($entity_type_info['bundles'])) {
+      $entity_type_label = empty($entity_type_info['label']) ? $entity_type : $entity_type_info['label'];
+
+      $potential_element = array(
+        '#type' => 'checkboxes',
+        '#title' => $entity_type_label,
+        '#options' => array(),
+        '#default_value' => $config && isset($config->bundles[$entity_type]) ? $config->bundles[$entity_type] : array(),
+      );
+
+      if (user_access('administer site configuration')) {
+        $all_key = EBA_ALL_BUNDLES;
+        $potential_element['#options'][$all_key] = '<em>' . t('Any @entity_type', array('@entity_type' => strtolower($entity_type_label))) . '</em>';
+      }
+
+      foreach ($entity_type_info['bundles'] as $bundle => $bundle_info) {
+        // Check the access
+        $access_args = array_intersect_key($bundle_info['admin'], drupal_map_assoc(array('access callback', 'access arguments')));
+        $access_args += array(
+          'access callback' => 'user_access',
+          'access arguments' => array('administer site configuration'),
+        );
+        $access = FALSE;
+        if (is_numeric($access_args['access callback'])) {
+          $access = (bool) $access_args['access callback'];
+        }
+        elseif ($access_args['access callback'] == 'user_access') {
+          $access = (count($access_args['access arguments']) == 1) ? user_access($access_args['access arguments'][0]) : user_access($access_args['access arguments'][0], $access_args['access arguments'][1]);
+        }
+        elseif (function_exists($access_args['access callback'])) {
+          $access = call_user_func_array($access_args['access callback'], $access_args['access arguments']);
+        }
+        if ($access) {
+          $potential_element['#options'][$bundle] = $bundle_info['label'];
+        }
+      }
+
+      if (!empty($potential_element['#options'])) {
+        $parent_element[$entity_type] = $potential_element;
+      }
     }
   }
 
-  $form['visibility']['eba'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Entity Block Attachment'),
-    '#collapsible' => TRUE,
-    '#collapsed' => TRUE,
-    '#group' => 'visibility',
-    '#weight' => 30,
-  );
-  $form['visibility']['eba']['eba_config'] = array(
-    '#type' => 'checkboxes',
-    '#title' => t('Entity bundles to display this block on'),
-    '#options' => $options,
-    '#description' => t('Manage the display of this block in the \'Manage display\' interface for each entity/bundle, provided by the Field UI module. Note that once a block is set to display on a type/bundle, it will instantly appear on all view modes of any entity of that type/bundle unless hidden through the Field UI.'),
-    '#default_value' => $config ? $config->bundles : array(),
-  );
-  $form['visibility']['eba']['eba_respect_visibility'] = array(
-    '#type' => 'checkbox',
-    '#title' => t('Respect block visibility settings'),
-    '#default_value' => $config ? $config->respect_visibility : array(),
-    '#description' => t('Only display the block on entities if it is not restricted by other visibility settings.'),
-  );
+  // If there were no allowed options then do not make changes to the form.
+  $children = element_children($parent_element);
+  if (!empty($children)) {
+    $form['visibility']['eba'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Entity Block Attachment'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#group' => 'visibility',
+      '#weight' => 30,
+    );
+    $form['visibility']['eba']['eba_bundles'] = $parent_element;
 
-  // The block configure form does not explicitly set its submission handler, so
-  // add it if necessary before our handler to $form['#submit'], or to the
-  // submit button if other modules have added submit callbacks to that.
-  if (isset($form['actions']['submit']['#submit'])) {
-    $form['actions']['submit']['#submit'][] = 'eba_form_block_admin_configure_submit';
+    $form['visibility']['eba']['eba_respect_visibility'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Respect block visibility settings'),
+      '#default_value' => $config ? $config->respect_visibility : array(),
+      '#description' => t('Only display the block on entities if it is not restricted by other visibility settings.'),
+    );
+
+    // The block configure form does not explicitly set its submission handler, so
+    // add it if necessary before our handler to $form['#submit'], or to the
+    // submit button if other modules have added submit callbacks to that.
+    if (isset($form['actions']['submit']['#submit'])) {
+      $form['actions']['submit']['#submit'][] = 'eba_form_block_admin_configure_submit';
+    }
+    if (!isset($form['#submit'])) {
+      $form['#submit'][] = 'block_admin_configure_submit';
+    }
+    $form['#submit'][] = 'eba_form_block_admin_configure_submit';
   }
-  if (!isset($form['#submit'])) {
-    $form['#submit'][] = 'block_admin_configure_submit';
-  }
-  $form['#submit'][] = 'eba_form_block_admin_configure_submit';
 }
 
 /**
  * Additional submission callback for the block configuration form.
  */
 function eba_form_block_admin_configure_submit($form, &$form_state) {
-  $module = $form_state['values']['module'];
-  $delta = $form_state['values']['delta'];
-  $config = eba_config_load($module, $delta);
+  if (isset($form_state['values']['eba_bundles'])) {
+    $module = $form_state['values']['module'];
+    $delta = $form_state['values']['delta'];
+    $all_bundles = $form_state['values']['eba_bundles'];
 
-  if (isset($form_state['values']['eba_config'])) {
-    if (empty($form_state['values']['eba_config'])) {
-      if ($config) {
+    foreach ($all_bundles as $entity_type => $bundles) {
+      $all_bundles[$entity_type] = array_values(array_filter($bundles));
+    }
+    $all_bundles = array_filter($all_bundles);
+
+    if (empty($all_bundles)) {
+      if ($config = eba_config_load($module, $delta)) {
         eba_config_delete($module, $delta);
       }
     }
@@ -271,12 +334,10 @@ function eba_form_block_admin_configure_submit($form, &$form_state) {
       $config = array(
         'module' => $module,
         'delta' => $delta,
-        'bundles' => $form_state['values']['eba_config'],
+        'bundles' => $all_bundles,
         'respect_visibility' => $form_state['values']['eba_respect_visibility'],
       );
       eba_config_save($config);
     }
-
-    field_cache_clear();
   }
 }
