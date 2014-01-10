@@ -8,17 +8,44 @@
 define('EBA_ALL_BUNDLES', '_eba_all_');
 
 /**
- * Load all EBA configuration items.
+ * Load all EBA configuration items, optionally matching the parameters.
  */
-function eba_config_load_all() {
-  $result = db_select('eba_config', 'eba')
-    ->fields('eba', array())
-    ->execute()
-    ->fetchAll();
-  foreach ($result as $row) {
-    $row->bundles = unserialize($row->bundles);
+function eba_config_load_all($entity_type = NULL, $bundle = NULL) {
+  $query = db_select('eba_config', 'eba')
+    ->fields('eba', array());
+
+  if (isset($entity_type) || isset($bundle)) {
+    $filter = '';
+    if (isset($entity_type)) {
+      $filter .= '|' . $entity_type . ':';
+    }
+    if (isset($bundle)) {
+      $filter .= ':' . $bundle . '|';
+    }
+
+    // If both parameters are passed, return any set to appear on all bundles.
+    if (isset($entity_type) && isset($bundle)) {
+      $all_filter = '|' . $entity_type . '::' . EBA_ALL_BUNDLES . '|';
+
+      $or = db_or()
+        ->condition('bundles', '%' . db_like($all_filter) . '%', 'LIKE')
+        ->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
+      $query->condition($or);
+    }
+    else {
+      $query->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
+    }
   }
-  return $result;
+
+  $blocks = array();
+  $result = $query->execute()
+    ->fetchAll();
+  foreach ($result as $block) {
+    $block->bundles = eba_unserialize_bundle_settings($block->bundles);
+    $blocks[$block->module][$block->delta] = $block;
+  }
+
+  return $blocks;
 }
 
 /**
@@ -32,10 +59,25 @@ function eba_config_load($module, $delta) {
     ->execute()
     ->fetch();
   if ($result) {
-    $result->bundles = unserialize($result->bundles);
+    $result->bundles = eba_unserialize_bundle_settings($result->bundles);
   }
 
   return $result;
+}
+
+/**
+ * Unserialize the bundles settings.
+ */
+function eba_unserialize_bundle_settings($string) {
+  $bundles = array();
+  if (!empty($string)) {
+    $pairs = explode('|', trim($string, '|'));
+    foreach ($pairs as $pair) {
+      list($entity_type, $bundle) = explode('::', $pair);
+      $bundles[$entity_type][$bundle] = $bundle;
+    }
+  }
+  return $bundles;
 }
 
 /**
@@ -47,7 +89,16 @@ function eba_config_save($config, $refresh = TRUE) {
   }
 
   if (is_array($config['bundles'])) {
-    $config['bundles'] = serialize($config['bundles']);
+    $string = '|';
+    if (!empty($config['bundles'])) {
+      foreach ($config['bundles'] as $entity_type => $bundles) {
+        foreach ($bundles as $bundle) {
+          $string .= '|' . $entity_type . '::' . $bundle;
+        }
+      }
+      $string .= '|';
+    }
+    $config['bundles'] = $string . '|';
   }
 
   db_merge('eba_config')
@@ -86,31 +137,29 @@ function eba_config_delete($module, $delta, $refresh = TRUE) {
 function eba_field_extra_fields() {
   $return = array();
 
-  $blocks = eba_config_load_all();
+  $blocks_by_modules = eba_config_load_all();
   $bundles_info = field_info_bundles();
-  // Keep a record of modules' block information to avoid multiple calls.
-  $module_info = array();
 
-  foreach ($blocks as $block) {
-    if (!isset($module_info[$block->module])) {
-      $module_info[$block->module] = module_invoke($block->module, 'block_info');
-      // Implementations of hook_block_info_alter() will be ignored, so modules
-      // should implement hook_field_extra_fields_alter() if necessary.
-    }
-    $block_info = $module_info[$block->module][$block->delta];
+  foreach ($blocks_by_modules as $module => $blocks) {
+    $module_info = module_invoke($module, 'block_info');
+    // Implementations of hook_block_info_alter() will be ignored, so modules
+    // should implement hook_field_extra_fields_alter() if necessary.
+    foreach ($blocks as $delta => $block) {
+      $block_info = $module_info[$delta];
 
-    foreach ($block->bundles as $entity_type => $block_bundles) {
-      if (isset($bundles_info[$entity_type])) {
-        if (in_array(EBA_ALL_BUNDLES, $block_bundles, TRUE)) {
-          $block_bundles = array_keys($bundles_info[$entity_type]);
-        }
-        foreach ($block_bundles as $bundle) {
-          if (isset($bundles_info[$entity_type][$bundle])) {
-            $return[$entity_type][$bundle]['display']['eba_' . $block->module . '-' . $block->delta] = array(
-              'label' => $block_info['info'],
-              'description' => $block_info['info'],
-              'weight' => isset($block_info['weight']) ? $block_info['weight'] : 30,
-            );
+      foreach ($block->bundles as $entity_type => $block_bundles) {
+        if (isset($bundles_info[$entity_type])) {
+          if (in_array(EBA_ALL_BUNDLES, $block_bundles, TRUE)) {
+            $block_bundles = array_keys($bundles_info[$entity_type]);
+          }
+          foreach ($block_bundles as $bundle) {
+            if (isset($bundles_info[$entity_type][$bundle])) {
+              $return[$entity_type][$bundle]['display']['eba_' . $module . '-' . $delta] = array(
+                'label' => $block_info['info'],
+                'description' => $block_info['info'],
+                'weight' => isset($block_info['weight']) ? $block_info['weight'] : 30,
+              );
+            }
           }
         }
       }
@@ -134,33 +183,46 @@ function eba_field_extra_fields() {
 function eba_entity_view_alter(&$build, $entity_type) {
   $view_mode = $build['#view_mode'];
 
-  // @TODO Check to make sure we have at least 1 block to display
-  // @see eva_get_views().
-
-  // If we've found an entity in the build array, gather field information.
-  if ($entity = _eba_extract_entity_from_build($build, $entity_type)) {
-    list(,, $bundle) = entity_extract_ids($entity_type, $entity);
-    // @TODO Cache field_extra_fields_get_display()?
-    $extra_fields = field_extra_fields_get_display($entity_type, $bundle, $view_mode);
-    foreach ($extra_fields as $extra_key => $extra_info) {
-      if (strpos($extra_key, 'eba_') === 0) {
-        if (!empty($extra_fields[$extra_key]['visible'])) {
-          list($module, $delta) = explode('-', substr($extra_key, 4), 2);
-          // @TODO Respect block visibility settings.
-          if ($block = eba_get_block($module, $delta)) {
-            $build[$extra_key] = $block;
-            $build[$extra_key]['#weight'] = $extra_fields[$extra_key]['weight'];
-            $build[$extra_key]['#eba_entity'] = $entity;
-            $build[$extra_key]['#eba_entity_type'] = $entity_type;
+  // Check to make sure we have at least one block to display.
+  if ($blocks_by_module = eba_config_load_all($entity_type)) {
+    // If we've found an entity in the build array, gather field information.
+    if ($entity = _eba_extract_entity_from_build($build, $entity_type)) {
+      list(,, $bundle) = entity_extract_ids($entity_type, $entity);
+      $extra_fields = eba_field_extra_fields_get_display($entity_type, $bundle, $view_mode);
+      foreach ($extra_fields as $extra_key => $extra_info) {
+        if (strpos($extra_key, 'eba_') === 0) {
+          if (!empty($extra_fields[$extra_key]['visible'])) {
+            list($module, $delta) = explode('-', substr($extra_key, 4), 2);
+            $respect_visibility = $blocks_by_module[$module][$delta]->respect_visibility;
+            if ($block = eba_get_block($module, $delta, $respect_visibility)) {
+              $build[$extra_key] = $block;
+              $build[$extra_key]['#weight'] = $extra_fields[$extra_key]['weight'];
+              $build[$extra_key]['#eba_entity'] = $entity;
+              $build[$extra_key]['#eba_entity_type'] = $entity_type;
+            }
           }
         }
       }
     }
+    // If we didn't find the entity in the build array, let the user know.
+    else {
+      watchdog('eba', t('EBA could not find the entity in its build array. Block was not attached to entity of type %type', array('%type' => $entity_type)), WATCHDOG_WARNING);
+    }
   }
-  // If we didn't find the entity in the build array, let the user know.
-  else {
-    watchdog('eba', t('EBA could not find the entity in its build array. Block was not attached to entity of type %type', array('%type' => $entity_type)), WATCHDOG_WARNING);
+}
+
+/**
+ * Returns the display settings to use for pseudo-fields in a given view mode.
+ *
+ * Statically cached since this could be called many times with identical
+ * parameters on the same page (e.g. on entity listings).
+ */
+function eba_field_extra_fields_get_display($entity_type, $bundle, $view_mode) {
+  $cache = &drupal_static(__FUNCTION__, array());
+  if (!isset($cache[$entity_type][$bundle][$view_mode])) {
+    $cache[$entity_type][$bundle][$view_mode] = field_extra_fields_get_display($entity_type, $bundle, $view_mode);
   }
+  return $cache[$entity_type][$bundle][$view_mode];
 }
 
 /**
@@ -175,15 +237,9 @@ function eba_entity_view_alter(&$build, $entity_type) {
  *   A renderable array representing the entity content.
  * @param $entity_type
  *   The type of entity being rendered (i.e. node, user, comment).
- *
- * @TODO Cache this?
  */
 function _eba_extract_entity_from_build($build, $entity_type = NULL) {
-  $build_paths = array(
-    'user' => '#account',
-    'taxonomy_term' => '#term',
-  );
-  drupal_alter('eba_build_path', $build_paths);
+  $build_paths = eba_build_paths();
 
   if (!empty($build_paths[$entity_type])) {
     return $build[$build_paths[$entity_type]];
@@ -201,21 +257,72 @@ function _eba_extract_entity_from_build($build, $entity_type = NULL) {
 }
 
 /**
+ * Cached store of potential paths to entity within build per entity type.
+ */
+function eba_build_paths() {
+  $build_paths = &drupal_static(__FUNCTION__);
+  if (!isset($build_paths)) {
+    if ($cached = cache_get(__FUNCTION__)) {
+      $build_paths = $cached->data;
+    }
+    else {
+      $build_paths = array(
+        'user' => '#account',
+        'taxonomy_term' => '#term',
+      );
+      drupal_alter('eba_build_path', $build_paths);
+      cache_set(__FUNCTION__, $build_paths);
+    }
+  }
+  return $build_paths;
+}
+
+/**
  * Retrieve the render array representation for the given block.
  *
  * @param $module
  *   The module that provides the block.
  * @param $delta
  *   The block delta.
+ * @param bool $respect_visibility
+ *   Wheher to respect block visibility settings or not.
  *
  * @return array|null
  *   A render array, suitable for passing to render(). If no block is
  *   available, NULL is returned.
  */
-function eba_get_block($module, $delta) {
-  $block = block_load($module, $delta);
-  $block->region = isset($block->region) ? $block->region : NULL;
-  if ($blocks = _block_render_blocks(array($block))) {
+function eba_get_block($module, $delta, $respect_visibility = FALSE) {
+  global $theme_key;
+
+  $result = db_select('block', 'b')
+    ->fields('b')
+    ->condition('b.module', $module)
+    ->condition('b.delta', $delta)
+    ->condition('b.theme', $theme_key)
+    ->addTag('block_load')
+    ->addTag('translatable')
+    ->execute();
+
+  $blocks = $result->fetchAll();
+  // If the block does not exist in the database yet return a stub block object.
+  if (empty($blocks)) {
+    $block = new stdClass();
+    $block->module = $module;
+    $block->delta = $delta;
+    $block->region = NULL;
+    $blocks = array($block);
+  }
+
+  if ($respect_visibility) {
+    foreach ($blocks as $block) {
+      // Set status to 1 manually, so block module may evaluate visibility.
+      $block->status = 1;
+    }
+    // Allow modules to modify the block list.
+    drupal_alter('block_list', $blocks);
+  }
+
+  if (!empty($blocks) && ($blocks = _block_render_blocks($blocks))) {
     return _block_get_renderable_array(array_values($blocks));
   }
   return NULL;
@@ -300,7 +407,7 @@ function eba_form_block_admin_configure_alter(&$form, &$form_state, $form_id) {
     $form['visibility']['eba']['eba_respect_visibility'] = array(
       '#type' => 'checkbox',
       '#title' => t('Respect block visibility settings'),
-      '#default_value' => $config ? $config->respect_visibility : array(),
+      '#default_value' => $config ? $config->respect_visibility : FALSE,
       '#description' => t('Only display the block on entities if it is not restricted by other visibility settings.'),
     );
 
