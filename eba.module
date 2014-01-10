@@ -88,14 +88,20 @@ function eba_field_extra_fields() {
 
   $blocks = eba_config_load_all();
   $bundles_info = field_info_bundles();
+  // Keep a record of modules' block information to avoid multiple calls.
+  $module_info = array();
+
   foreach ($blocks as $block) {
-    // @TODO Cache each module's block_info result?
-    $block_info = module_invoke($block->module, 'block_info');
-    $block_info = $block_info[$block->delta];
+    if (!isset($module_info[$block->module])) {
+      $module_info[$block->module] = module_invoke($block->module, 'block_info');
+      // Implementations of hook_block_info_alter() will be ignored, so modules
+      // should implement hook_field_extra_fields_alter() if necessary.
+    }
+    $block_info = $module_info[$block->module][$block->delta];
 
     foreach ($block->bundles as $entity_type => $block_bundles) {
       if (isset($bundles_info[$entity_type])) {
-        if (!empty($block_bundles[EBA_ALL_BUNDLES])) {
+        if (in_array(EBA_ALL_BUNDLES, $block_bundles, TRUE)) {
           $block_bundles = array_keys($bundles_info[$entity_type]);
         }
         foreach ($block_bundles as $bundle) {
@@ -160,10 +166,10 @@ function eba_entity_view_alter(&$build, $entity_type) {
 /**
  * Extract an actual entity object from its $build array.
  *
- * This is a bit more complicated than it should be, since core entities, contrib
- * entities, and contrib entities based on EntityAPI all store their junk in
- * different slots of the build array. See http://drupal.org/node/1170198 and
- * https://drupal.org/node/1772204.
+ * This is a bit more complicated than it should be, since core entities,
+ * contrib entities, and contrib entities based on EntityAPI all store their
+ * junk in different slots of the build array. See
+ * http://drupal.org/node/1170198 and http://drupal.org/node/1772204.
  *
  * @param $build
  *   A renderable array representing the entity content.
