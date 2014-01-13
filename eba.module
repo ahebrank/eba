@@ -11,41 +11,52 @@ define('EBA_ALL_BUNDLES', '_eba_all_');
  * Load all EBA configuration items, optionally matching the parameters.
  */
 function eba_config_load_all($entity_type = NULL, $bundle = NULL) {
-  $query = db_select('eba_config', 'eba')
-    ->fields('eba', array());
-
-  if (isset($entity_type) || isset($bundle)) {
-    $filter = '';
-    if (isset($entity_type)) {
-      $filter .= '|' . $entity_type . ':';
-    }
-    if (isset($bundle)) {
-      $filter .= ':' . $bundle . '|';
-    }
-
-    // If both parameters are passed, return any set to appear on all bundles.
-    if (isset($entity_type) && isset($bundle)) {
-      $all_filter = '|' . $entity_type . '::' . EBA_ALL_BUNDLES . '|';
-
-      $or = db_or()
-        ->condition('bundles', '%' . db_like($all_filter) . '%', 'LIKE')
-        ->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
-      $query->condition($or);
+  $blocks = &drupal_static('eba_configs', array());
+  $cid = $entity_type . ':' . $bundle;
+  if (!isset($blocks[$cid])) {
+    if ($cached = cache_get('eba_configs:' . $cid)) {
+      $blocks[$cid] = $cached->data;
     }
     else {
-      $query->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
+      $query = db_select('eba_config', 'eba')
+        ->fields('eba', array());
+
+      if (isset($entity_type) || isset($bundle)) {
+        $filter = '';
+        if (isset($entity_type)) {
+          $filter .= '|' . $entity_type . ':';
+        }
+        if (isset($bundle)) {
+          $filter .= ':' . $bundle . '|';
+        }
+
+        // If both parameters are passed, return any set to appear on all bundles.
+        if (isset($entity_type) && isset($bundle)) {
+          $all_filter = '|' . $entity_type . '::' . EBA_ALL_BUNDLES . '|';
+
+          $or = db_or()
+            ->condition('bundles', '%' . db_like($all_filter) . '%', 'LIKE')
+            ->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
+          $query->condition($or);
+        }
+        else {
+          $query->condition('bundles', '%' . db_like($filter) . '%', 'LIKE');
+        }
+      }
+
+      $blocks[$cid] = array();
+      $result = $query->execute()
+        ->fetchAll();
+      foreach ($result as $block) {
+        $block->bundles = eba_unserialize_bundle_settings($block->bundles);
+        $blocks[$cid][$block->module][$block->delta] = $block;
+      }
+
+      cache_set('eba_configs:' . $cid, $blocks[$cid]);
     }
   }
 
-  $blocks = array();
-  $result = $query->execute()
-    ->fetchAll();
-  foreach ($result as $block) {
-    $block->bundles = eba_unserialize_bundle_settings($block->bundles);
-    $blocks[$block->module][$block->delta] = $block;
-  }
-
-  return $blocks;
+  return $blocks[$cid];
 }
 
 /**
@@ -113,6 +124,8 @@ function eba_config_save($config, $refresh = TRUE) {
     ->execute();
 
   if ($refresh) {
+    drupal_static_reset('eba_configs');
+    cache_clear_all('eba_configs:*', 'cache', TRUE);
     field_cache_clear();
   }
 }
@@ -127,6 +140,8 @@ function eba_config_delete($module, $delta, $refresh = TRUE) {
     ->execute();
 
   if ($refresh) {
+    drupal_static_reset('eba_configs');
+    cache_clear_all('eba_configs:*', 'cache', TRUE);
     field_cache_clear();
   }
 }
