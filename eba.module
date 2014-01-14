@@ -125,7 +125,7 @@ function eba_config_save($config, $refresh = TRUE) {
 
   if ($refresh) {
     drupal_static_reset('eba_configs');
-    cache_clear_all('eba_configs:*', 'cache', TRUE);
+    cache_clear_all('eba_configs:', 'cache', TRUE);
     field_cache_clear();
   }
 }
@@ -141,7 +141,7 @@ function eba_config_delete($module, $delta, $refresh = TRUE) {
 
   if ($refresh) {
     drupal_static_reset('eba_configs');
-    cache_clear_all('eba_configs:*', 'cache', TRUE);
+    cache_clear_all('eba_configs:', 'cache', TRUE);
     field_cache_clear();
   }
 }
