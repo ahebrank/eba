@@ -380,7 +380,7 @@ function eba_form_block_admin_configure_alter(&$form, &$form_state, $form_id) {
 
       foreach ($entity_type_info['bundles'] as $bundle => $bundle_info) {
         // Check the access if the bundle can be configured.
-        if (!empty($bundle_info['admin'])) {
+        if (empty($bundle_info['admin'])) {
           continue;
         }
 
