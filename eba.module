@@ -379,14 +379,21 @@ function eba_form_block_admin_configure_alter(&$form, &$form_state, $form_id) {
       }
 
       foreach ($entity_type_info['bundles'] as $bundle => $bundle_info) {
-        // Check the access
+        // Check the access if the bundle can be configured.
+        if (!empty($bundle_info['admin'])) {
+          continue;
+        }
+
         $access_args = array_intersect_key($bundle_info['admin'], drupal_map_assoc(array('access callback', 'access arguments')));
-        $access_args += array(
-          'access callback' => 'user_access',
-          'access arguments' => array('administer site configuration'),
-        );
+        if (!isset($access_args['access callback'])) {
+          $access_args['access callback'] = 'user_access';
+        }
+        if (!isset($access_args['access arguments'])) {
+          $access_args['access arguments'] = ($access_args['access callback'] = 'user_access') ? array('administer site configuration') : array();
+        }
+
         $access = FALSE;
-        if (is_numeric($access_args['access callback'])) {
+        if (is_bool($access_args['access callback']) || is_numeric($access_args['access callback'])) {
           $access = (bool) $access_args['access callback'];
         }
         elseif ($access_args['access callback'] == 'user_access') {
