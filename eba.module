@@ -8,7 +8,8 @@
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Render\Element;
-use Drupal\eba\Helpers\EbaConfig;
+use Drupal\Core\Entity\ContentEntityType;
+use Drupal\eba\Helpers\Blocks;
 
 /**
  * Implements hook_help().
@@ -26,4 +27,91 @@ function eba_help($route_name, RouteMatchInterface $route_match) {
   }
 }
 
-// change all this to use https://www.drupal.org/node/2287827
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function eba_form_block_form_alter(&$form, FormStateInterface $form_state) {
+  /** @var \Drupal\block\Entity\Block $block */
+  $block = $form_state->getFormObject()->getEntity();
+  $bundle_config = $block->getThirdPartySetting('eba', 'bundles');
+  $respect_visibility = $block->getThirdPartySetting('eba', 'respect_visibility');
+
+  $entity_info = \Drupal::entityManager()->getDefinitions();
+  foreach ($entity_info as $entity_type => $entity_type_info) {
+    if ($entity_type_info instanceof ContentEntityType) {
+      $entity_type_label = $entity_type_info->get('label');
+
+      $potential_element = [
+        '#type' => 'checkboxes',
+        '#title' => $entity_type_label,
+        '#options' => [],
+        '#default_value' => isset($bundle_config[$entity_type]) ? $bundle_config[$entity_type] : [],
+      ];
+
+      foreach (\Drupal::entityManager()->getBundleInfo($entity_type) as $bundle => $bundle_info) {
+        // need some access checks but skipping for now
+        $potential_element['#options'][$bundle] = $bundle_info['label'];
+      }
+
+      if (!empty($potential_element['#options'])) {
+        $parent_element[$entity_type] = $potential_element;
+      }
+    }
+  }
+
+  // If there were no allowed options then do not make changes to the form.
+  $children = Element::children($parent_element);
+  if (!empty($children)) {
+    $form['third_party_settings']['eba'] = [
+      '#type' => 'fieldset',
+      '#title' => t('Entity Block Attachment'),
+    ];
+    $form['third_party_settings']['eba']['bundles'] = $parent_element;
+
+    $form['third_party_settings']['eba']['respect_visibility'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Respect block visibility settings'),
+      '#default_value' => $respect_visibility,
+      '#description' => t('Only display the block on entities if it is not restricted by other visibility settings.'),
+    );
+  }
+}
+
+/**
+ * Implements hook_entity_extra_field_info()
+ */
+function eba_entity_extra_field_info() {
+  $extra = [];
+
+  $blocks = Blocks::getAllAttached();
+
+  foreach ($blocks as $id => $data) {
+    foreach ($data as $entity => $bundles) {
+      foreach ($bundles as $bundle) {
+        $extra[$entity][$bundle]['display'][Blocks::getFieldName($id)] = [
+          'label' => Blocks::getFieldLabel($id),
+          'description' => Blocks::getFieldDescription($id),
+          'weight' => 10,
+        ];
+      }
+    }
+  }
+
+  return $extra;
+}
+
+/**
+ * Implements hook_entity_view()
+ */
+function eva_entity_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, $view_mode) {
+
+  $type = $entity->getEntityTypeId();
+  if ($blocks = Blocks::getAttachedTo($entity, $bundle)) {
+
+    foreach ($blocks as $id => $element) {
+      if (!empty($element)) {
+        $build[Blocks::getFieldName($id)][] = $element;
+      }
+    }
+  }
+}
