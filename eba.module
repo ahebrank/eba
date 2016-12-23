@@ -2,16 +2,17 @@
 
 /**
  * @file
- * Contains eba.module..
+ * Contains eba.module
  */
 
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Render\Element;
-use Drupal\Core\Entity\ContentEntityType;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+
 use Drupal\eba\Helpers\AttachedBlocks;
+use Drupal\eba\Helpers\EntityAttached;
 
 /**
  * Implements hook_help().
@@ -36,26 +37,31 @@ function eba_form_block_form_alter(&$form, FormStateInterface $form_state) {
   /** @var \Drupal\block\Entity\Block $block */
   $block = $form_state->getFormObject()->getEntity();
   $bundle_config = $block->getThirdPartySetting('eba', 'bundles');
+  
+  $access_override = \Drupal::currentUser()->hasPermission('bypass eba access');
 
-  $entity_info = \Drupal::entityManager()->getDefinitions();
+  $parent_element = [];
+
+  // loop through entity types
+  $entity_info = EntityAttached::getEntityTypes();
   foreach ($entity_info as $entity_type => $entity_type_info) {
-    if ($entity_type_info instanceof ContentEntityType) {
-      $entity_type_label = $entity_type_info->get('label');
-
-      $potential_element = [
-        '#type' => 'checkboxes',
-        '#title' => $entity_type_label,
-        '#options' => [],
-        '#default_value' => isset($bundle_config[$entity_type]) ? $bundle_config[$entity_type] : [],
-      ];
-
-      foreach (\Drupal::entityManager()->getBundleInfo($entity_type) as $bundle => $bundle_info) {
-        // need some access checks but skipping for now
-        $potential_element['#options'][$bundle] = $bundle_info['label'];
+    if (EntityAttached::entityIsFieldable($entity_type_info)) {
+      $bundle_opts = [];
+      // collect a list of possible entity bundles
+      foreach (EntityAttached::getBundles($entity_type) as $bundle => $bundle_info) {
+        if ($access_override || EntityAttached::bundleIsAccessible($entity_type, $bundle)) {
+          $bundle_opts[$bundle] = $bundle_info['label'];
+        }
       }
 
-      if (!empty($potential_element['#options'])) {
-        $parent_element[$entity_type] = $potential_element;
+      // if the entity has available bundles, add them to the block config form
+      if (!empty($bundle_opts)) {
+        $parent_element[$entity_type] = [
+          '#type' => 'checkboxes',
+          '#title' => $entity_type_info->get('label'),
+          '#options' => $bundle_opts,
+          '#default_value' => isset($bundle_config[$entity_type]) ? $bundle_config[$entity_type] : [],
+        ];
       }
     }
   }

@@ -5,6 +5,7 @@ namespace Drupal\eba\Helpers;
 use Drupal\block\Entity\Block;
 
 class AttachedBlocks {
+  
   /**
    * return a list of all blocks that might be attached to entities
    * as [ $block_id => [ $entity => $bundle ]]
@@ -52,7 +53,7 @@ class AttachedBlocks {
   **/
   static function render($block_id) {
     $block = Block::load($block_id);
-    $build = \Drupal::entityManager()->getViewBuilder('block')
+    $build = \Drupal::service('entity_type.manager')->getViewBuilder('block')
       ->view($block);
     return $build;
   }
