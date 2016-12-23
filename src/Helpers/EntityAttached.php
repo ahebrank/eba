@@ -15,14 +15,6 @@ class EntityAttached {
   }
   
   /**
-   * check if a particular entity bundle is attachable
-  **/
-  static function bundleIsAccessible($entity_id, $bundle_id) {
-    $perm = PermissionsGenerator::getPermissionName($entity_id, $bundle_id);
-    return \Drupal::currentUser()->hasPermission($perm);
-  }
-  
-  /**
    * wrap getBundleInfo()
   **/
   static function getBundles($entity_type) {

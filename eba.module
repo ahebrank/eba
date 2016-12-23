@@ -34,11 +34,13 @@ function eba_help($route_name, RouteMatchInterface $route_match) {
  * Implements hook_form_FORM_ID_alter().
  */
 function eba_form_block_form_alter(&$form, FormStateInterface $form_state) {
+  if (!\Drupal::currentUser()->hasPermission('administer eba attachment')) {
+    return;
+  }
+  
   /** @var \Drupal\block\Entity\Block $block */
   $block = $form_state->getFormObject()->getEntity();
   $bundle_config = $block->getThirdPartySetting('eba', 'bundles');
-  
-  $access_override = \Drupal::currentUser()->hasPermission('bypass eba access');
 
   $parent_element = [];
 
@@ -49,9 +51,7 @@ function eba_form_block_form_alter(&$form, FormStateInterface $form_state) {
       $bundle_opts = [];
       // collect a list of possible entity bundles
       foreach (EntityAttached::getBundles($entity_type) as $bundle => $bundle_info) {
-        if ($access_override || EntityAttached::bundleIsAccessible($entity_type, $bundle)) {
-          $bundle_opts[$bundle] = $bundle_info['label'];
-        }
+        $bundle_opts[$bundle] = $bundle_info['label'];
       }
 
       // if the entity has available bundles, add them to the block config form

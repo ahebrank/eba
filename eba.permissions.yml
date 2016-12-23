@@ -1,7 +1,4 @@
-bypass eba access:
-  title: 'Bypass EBA access control'
+administer eba attachment:
+  title: 'Administer EBA attachments'
   description: 'Attach blocks to any entity.'
   restrict access: true
-
-permission_callbacks:
-  - '\Drupal\eba\PermissionsGenerator::entityPermissions'
