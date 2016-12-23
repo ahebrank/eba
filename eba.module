@@ -11,7 +11,7 @@ use Drupal\Core\Render\Element;
 use Drupal\Core\Entity\ContentEntityType;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
-use Drupal\eba\Helpers\Blocks;
+use Drupal\eba\Helpers\AttachedBlocks;
 
 /**
  * Implements hook_help().
@@ -84,15 +84,14 @@ function eba_form_block_form_alter(&$form, FormStateInterface $form_state) {
  */
 function eba_entity_extra_field_info() {
   $extra = [];
-
-  $blocks = Blocks::getAllAttached();
+  $blocks = AttachedBlocks::getAllAttached();
 
   foreach ($blocks as $id => $data) {
     foreach ($data as $entity => $bundles) {
       foreach ($bundles as $bundle) {
-        $extra[$entity][$bundle]['display'][Blocks::getFieldName($id)] = [
-          'label' => Blocks::getFieldLabel($id),
-          'description' => Blocks::getFieldDescription($id),
+        $extra[$entity][$bundle]['display'][AttachedBlocks::getFieldName($id)] = [
+          'label' => AttachedBlocks::getFieldLabel($id),
+          'description' => AttachedBlocks::getFieldDescription($id),
           'weight' => 10,
         ];
       }
@@ -110,10 +109,10 @@ function eba_entity_view(array &$build, EntityInterface $entity, EntityViewDispl
     $type = $entity->getEntityTypeId();
     $bundle = $entity->bundle();
     
-    if ($blocks = Blocks::getAttachedTo($type, $bundle)) {
+    if ($blocks = AttachedBlocks::getAttachedTo($type, $bundle)) {
       foreach ($blocks as $id => $element) {
         if (!empty($element)) {
-          $build[Blocks::getFieldName($id)][] = $element;
+          $build[AttachedBlocks::getFieldName($id)][] = $element;
         }
       }
     }

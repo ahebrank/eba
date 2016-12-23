@@ -4,7 +4,7 @@ namespace Drupal\eba\Helpers;
 
 use Drupal\block\Entity\Block;
 
-class Blocks {
+class AttachedBlocks {
   /**
    * return a list of all blocks that might be attached to entities
    * as [ $block_id => [ $entity => $bundle ]]
