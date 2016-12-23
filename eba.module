@@ -9,6 +9,8 @@ use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Render\Element;
 use Drupal\Core\Entity\ContentEntityType;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
 use Drupal\eba\Helpers\Blocks;
 
 /**
@@ -103,14 +105,16 @@ function eba_entity_extra_field_info() {
 /**
  * Implements hook_entity_view()
  */
-function eva_entity_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, $view_mode) {
-
-  $type = $entity->getEntityTypeId();
-  if ($blocks = Blocks::getAttachedTo($entity, $bundle)) {
-
-    foreach ($blocks as $id => $element) {
-      if (!empty($element)) {
-        $build[Blocks::getFieldName($id)][] = $element;
+function eba_entity_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, $view_mode) {
+  if ($entity) {
+    $type = $entity->getEntityTypeId();
+    $bundle = $entity->bundle();
+    
+    if ($blocks = Blocks::getAttachedTo($type, $bundle)) {
+      foreach ($blocks as $id => $element) {
+        if (!empty($element)) {
+          $build[Blocks::getFieldName($id)][] = $element;
+        }
       }
     }
   }
