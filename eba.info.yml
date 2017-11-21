@@ -1,4 +1,4 @@
-name: EBA: Entity Block Attachment
+name: EBA - Entity Block Attachment
 type: module
 description: Attach a block to an entity bundle
 core: 8.x
